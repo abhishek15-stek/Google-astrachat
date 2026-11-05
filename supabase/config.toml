@@ -1,0 +1,10 @@
+project_id = "lntjdcvvhgupebrgnybb"
+
+[functions.ai-chat]
+verify_jwt = false
+
+[functions.auto-feedback]
+verify_jwt = false
+
+[functions.astra-core]
+verify_jwt = false
