@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, createContext, useContext, ReactNode } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 import type { Json } from '@/integrations/supabase/types';
@@ -7,6 +7,7 @@ import {
   getScreenShareDiagnostics,
   tryNativeScreenCapture,
 } from '@/lib/screenShareDiagnostics';
+
 interface ScreenShareSession {
   id: string;
   requester_id: string;
@@ -28,7 +29,29 @@ interface ScreenShareState {
   pendingRequest: ScreenShareSession | null;
 }
 
-export function useScreenShare(receiverId?: string) {
+interface ScreenShareContextType extends ScreenShareState {
+  startShare: (targetUserId: string, options?: { audio?: boolean; video?: boolean }) => Promise<string | undefined>;
+  acceptShare: (sessionId: string) => Promise<void>;
+  denyShare: (sessionId: string) => Promise<void>;
+  endShare: () => Promise<void>;
+}
+
+const defaultState: ScreenShareContextType = {
+  isSharing: false,
+  isViewing: false,
+  localStream: null,
+  remoteStream: null,
+  sessionId: null,
+  pendingRequest: null,
+  startShare: async () => undefined,
+  acceptShare: async () => {},
+  denyShare: async () => {},
+  endShare: async () => {},
+};
+
+const ScreenShareContext = createContext<ScreenShareContextType>(defaultState);
+
+export function ScreenShareProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [state, setState] = useState<ScreenShareState>({
     isSharing: false,
@@ -38,11 +61,60 @@ export function useScreenShare(receiverId?: string) {
     sessionId: null,
     pendingRequest: null,
   });
-  
+
   const peerConnection = useRef<RTCPeerConnection | null>(null);
   const iceCandidatesQueue = useRef<RTCIceCandidateInit[]>([]);
   const sessionIdRef = useRef<string | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
   const seenIce = useRef<Set<string>>(new Set());
+  const endShareRef = useRef<() => Promise<void>>(() => Promise.resolve());
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    localStreamRef.current = state.localStream;
+    sessionIdRef.current = state.sessionId;
+  }, [state.localStream, state.sessionId]);
+
+  // End screen share
+  const endShare = useCallback(async () => {
+    const stream = localStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+    }
+
+    if (peerConnection.current) {
+      peerConnection.current.close();
+      peerConnection.current = null;
+    }
+
+    const currentSessionId = sessionIdRef.current;
+    if (currentSessionId) {
+      try {
+        await supabase
+          .from('screen_share_sessions')
+          .update({ status: 'ended', ended_at: new Date().toISOString() })
+          .eq('id', currentSessionId);
+      } catch (e) {
+        console.warn('Failed to update session end state:', e);
+      }
+    }
+
+    setState({
+      isSharing: false,
+      isViewing: false,
+      localStream: null,
+      remoteStream: null,
+      sessionId: null,
+      pendingRequest: null,
+    });
+    sessionIdRef.current = null;
+    localStreamRef.current = null;
+    seenIce.current = new Set();
+  }, []);
+
+  useEffect(() => {
+    endShareRef.current = endShare;
+  }, [endShare]);
 
   // Create WebRTC peer connection
   const createPeerConnection = useCallback(() => {
@@ -56,31 +128,34 @@ export function useScreenShare(receiverId?: string) {
     pc.onicecandidate = async (event) => {
       const activeSessionId = sessionIdRef.current;
       if (event.candidate && activeSessionId) {
-        // Add ICE candidate to the session
-        const candidate = { ...event.candidate.toJSON(), owner: user?.id } as RTCIceCandidateInit & { owner?: string };
-        const { data: session } = await supabase
-          .from('screen_share_sessions')
-          .select('ice_candidates')
-          .eq('id', activeSessionId)
-          .single();
-        
-        const existingCandidates = (session?.ice_candidates as unknown as (RTCIceCandidateInit & { owner?: string })[]) || [];
-        await supabase
-          .from('screen_share_sessions')
-          .update({ 
-            ice_candidates: [...existingCandidates, candidate] as Json
-          })
-          .eq('id', activeSessionId);
+        try {
+          const candidate = { ...event.candidate.toJSON(), owner: user?.id } as RTCIceCandidateInit & { owner?: string };
+          const { data: session } = await supabase
+            .from('screen_share_sessions')
+            .select('ice_candidates')
+            .eq('id', activeSessionId)
+            .single();
+
+          const existingCandidates = (session?.ice_candidates as unknown as (RTCIceCandidateInit & { owner?: string })[]) || [];
+          await supabase
+            .from('screen_share_sessions')
+            .update({
+              ice_candidates: [...existingCandidates, candidate] as Json,
+            })
+            .eq('id', activeSessionId);
+        } catch (err) {
+          console.warn('Failed to save ICE candidate:', err);
+        }
       }
     };
 
     pc.ontrack = (event) => {
-      setState(prev => ({ ...prev, remoteStream: event.streams[0] }));
+      setState((prev) => ({ ...prev, remoteStream: event.streams[0] }));
     };
 
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-        endShare();
+        endShareRef.current();
       }
     };
 
@@ -90,7 +165,7 @@ export function useScreenShare(receiverId?: string) {
 
   // Start screen sharing (requester side)
   const startShare = useCallback(async (targetUserId: string, options?: { audio?: boolean; video?: boolean }) => {
-    if (!user) return;
+    if (!user) return undefined;
 
     try {
       // 1) Try native (Capacitor) first — gives real full-screen capture on Android APK.
@@ -119,22 +194,24 @@ export function useScreenShare(receiverId?: string) {
         .single();
 
       if (error || !session) {
-        stream.getTracks().forEach(t => t.stop());
+        stream.getTracks().forEach((t) => t.stop());
         throw error || new Error('Failed to create session');
       }
 
-      setState(prev => ({
+      localStreamRef.current = stream;
+      sessionIdRef.current = session.id;
+
+      setState((prev) => ({
         ...prev,
         isSharing: true,
         localStream: stream,
         sessionId: session.id,
       }));
-      sessionIdRef.current = session.id;
 
       // Create peer connection and offer
       const pc = createPeerConnection();
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
-      
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
@@ -146,7 +223,7 @@ export function useScreenShare(receiverId?: string) {
 
       // Handle stream ending
       stream.getVideoTracks()[0].onended = () => {
-        endShare();
+        endShareRef.current();
       };
 
       return session.id;
@@ -171,11 +248,11 @@ export function useScreenShare(receiverId?: string) {
       if (error || !session) throw error || new Error('Session not found');
 
       const pc = createPeerConnection();
-      
+
       // Set remote description (offer)
       const offer = session.offer as unknown as RTCSessionDescriptionInit;
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      
+
       // Create and set answer
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -183,7 +260,7 @@ export function useScreenShare(receiverId?: string) {
       // Save answer and update status
       await supabase
         .from('screen_share_sessions')
-        .update({ 
+        .update({
           status: 'accepted',
           answer: { type: answer.type, sdp: answer.sdp } as Json,
         })
@@ -195,13 +272,13 @@ export function useScreenShare(receiverId?: string) {
       }
       iceCandidatesQueue.current = [];
 
-      setState(prev => ({
+      sessionIdRef.current = sessionId;
+      setState((prev) => ({
         ...prev,
         isViewing: true,
         sessionId,
         pendingRequest: null,
       }));
-      sessionIdRef.current = sessionId;
     } catch (error) {
       console.error('Failed to accept share:', error);
       throw error;
@@ -210,50 +287,30 @@ export function useScreenShare(receiverId?: string) {
 
   // Deny incoming share request
   const denyShare = useCallback(async (sessionId: string) => {
-    await supabase
-      .from('screen_share_sessions')
-      .update({ status: 'denied' })
-      .eq('id', sessionId);
-    
-    setState(prev => ({ ...prev, pendingRequest: null }));
-  }, []);
-
-  // End screen share
-  const endShare = useCallback(async () => {
-    if (state.localStream) {
-      state.localStream.getTracks().forEach(t => t.stop());
-    }
-    
-    if (peerConnection.current) {
-      peerConnection.current.close();
-      peerConnection.current = null;
-    }
-
-    if (state.sessionId) {
+    try {
       await supabase
         .from('screen_share_sessions')
-        .update({ status: 'ended', ended_at: new Date().toISOString() })
-        .eq('id', state.sessionId);
+        .update({ status: 'denied' })
+        .eq('id', sessionId);
+    } catch (e) {
+      console.warn('Failed to deny share in database:', e);
     }
 
-    setState({
-      isSharing: false,
-      isViewing: false,
-      localStream: null,
-      remoteStream: null,
-      sessionId: null,
-      pendingRequest: null,
-    });
-    sessionIdRef.current = null;
-    seenIce.current = new Set();
-  }, [state.localStream, state.sessionId]);
+    setState((prev) => ({ ...prev, pendingRequest: null }));
+  }, []);
 
   // Listen for incoming share requests and session updates
   useEffect(() => {
     if (!user) return;
 
+    const channelName = `screen-share-session-${user.id}`;
+    const existing = supabase.getChannels().find((c) => c.topic === `realtime:${channelName}`);
+    if (existing) {
+      supabase.removeChannel(existing);
+    }
+
     const channel = supabase
-      .channel('screen-share-updates')
+      .channel(channelName)
       .on(
         'postgres_changes',
         {
@@ -263,12 +320,12 @@ export function useScreenShare(receiverId?: string) {
         },
         async (payload) => {
           const session = payload.new as ScreenShareSession;
-          
+
           // Handle incoming request (for receiver)
           if (payload.eventType === 'INSERT' && session.receiver_id === user.id && session.status === 'pending') {
-            setState(prev => ({ ...prev, pendingRequest: session }));
+            setState((prev) => ({ ...prev, pendingRequest: session }));
           }
-          
+
           // Handle session acceptance (for requester) - complete WebRTC handshake
           if (payload.eventType === 'UPDATE' && session.requester_id === user.id && session.status === 'accepted' && session.answer) {
             if (peerConnection.current && peerConnection.current.signalingState !== 'stable') {
@@ -278,12 +335,12 @@ export function useScreenShare(receiverId?: string) {
               );
             }
           }
-          
+
           // Handle denial
           if (payload.eventType === 'UPDATE' && session.requester_id === user.id && session.status === 'denied') {
-            endShare();
+            endShareRef.current();
           }
-          
+
           // Handle ICE candidates
           if (payload.eventType === 'UPDATE' && session.ice_candidates && peerConnection.current) {
             const candidates = session.ice_candidates as unknown as RTCIceCandidateInit[];
@@ -299,11 +356,11 @@ export function useScreenShare(receiverId?: string) {
               }
             }
           }
-          
+
           // Handle session end
           if (payload.eventType === 'UPDATE' && session.status === 'ended') {
             if (session.requester_id === user.id || session.receiver_id === user.id) {
-              endShare();
+              endShareRef.current();
             }
           }
         }
@@ -313,13 +370,24 @@ export function useScreenShare(receiverId?: string) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user, endShare]);
+  }, [user]);
 
-  return {
-    ...state,
-    startShare,
-    acceptShare,
-    denyShare,
-    endShare,
-  };
+  return (
+    <ScreenShareContext.Provider
+      value={{
+        ...state,
+        startShare,
+        acceptShare,
+        denyShare,
+        endShare,
+      }}
+    >
+      {children}
+    </ScreenShareContext.Provider>
+  );
+}
+
+export function useScreenShare(_receiverId?: string) {
+  const context = useContext(ScreenShareContext);
+  return context || defaultState;
 }

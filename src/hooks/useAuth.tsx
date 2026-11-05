@@ -64,39 +64,74 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
+    let isMounted = true;
+
+    // Safety timeout: Ensure loading is ALWAYS resolved within 3.5s even if network stalls
+    const safetyTimer = setTimeout(() => {
+      if (isMounted) {
+        setLoading(false);
+      }
+    }, 3500);
+
     // Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
+        if (!isMounted) return;
         setSession(session);
         setUser(session?.user ?? null);
 
-        // Defer admin check with setTimeout to avoid deadlock
         if (session?.user) {
-          setTimeout(() => {
-            loadUserRole(session.user.id).then(applyRole);
-          }, 0);
+          loadUserRole(session.user.id)
+            .then((r) => {
+              if (isMounted) applyRole(r);
+            })
+            .catch(() => {
+              if (isMounted) applyRole('user');
+            });
         } else {
           applyRole('user');
         }
       }
     );
 
-    // THEN check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      
-      if (session?.user) {
-        loadUserRole(session.user.id).then((nextRole) => {
-          applyRole(nextRole);
-          setLoading(false);
-        });
-      } else {
-        setLoading(false);
-      }
-    });
+    // THEN check for existing session with timeout and catch
+    const initAuth = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        if (!isMounted) return;
 
-    return () => subscription.unsubscribe();
+        setSession(session);
+        setUser(session?.user ?? null);
+
+        if (session?.user) {
+          try {
+            const nextRole = await loadUserRole(session.user.id);
+            if (isMounted) applyRole(nextRole);
+          } catch {
+            if (isMounted) applyRole('user');
+          }
+        } else {
+          if (isMounted) applyRole('user');
+        }
+      } catch (err) {
+        console.warn('Auth session check completed with fallback:', err);
+        if (isMounted) applyRole('user');
+      } finally {
+        if (isMounted) {
+          clearTimeout(safetyTimer);
+          setLoading(false);
+        }
+      }
+    };
+
+    initAuth();
+
+    return () => {
+      isMounted = false;
+      clearTimeout(safetyTimer);
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signUp = async (email: string, password: string, displayName: string) => {

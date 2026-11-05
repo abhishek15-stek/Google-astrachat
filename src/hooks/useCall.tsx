@@ -443,8 +443,14 @@ export function useCall() {
   useEffect(() => {
     if (!user) return;
 
+    const channelName = `call-updates-${user.id}`;
+    const existing = supabase.getChannels().find((c) => c.topic === `realtime:${channelName}`);
+    if (existing) {
+      supabase.removeChannel(existing);
+    }
+
     const channel = supabase
-      .channel('call-updates')
+      .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'calls' }, async (payload) => {
         const call = payload.new as CallSession;
 

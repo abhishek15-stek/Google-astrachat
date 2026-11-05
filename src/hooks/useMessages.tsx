@@ -47,7 +47,7 @@ export function useMessages() {
     return data?.user_id;
   }, []);
 
-  // Fetch all chat threads
+  // Fetch all chat threads without N+1 query loops
   const fetchThreads = useCallback(async () => {
     if (!user) return;
 
@@ -63,33 +63,33 @@ export function useMessages() {
         isAI: true,
       });
 
+      // 1) Batch fetch recent messages in a single query to eliminate N+1 loops
+      const { data: recentMsgs } = await supabase
+        .from('messages')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(300);
+
+      const lastMessageMap = new Map<string, Message>();
+      if (recentMsgs) {
+        for (const msg of recentMsgs) {
+          if (!lastMessageMap.has(msg.receiver_id)) {
+            lastMessageMap.set(msg.receiver_id, msg as unknown as Message);
+          }
+        }
+      }
+
       // Always add admin support chat for non-admin users (private 1-on-1)
       if (!isAdmin) {
-        const adminId = await getAdminId();
-        if (adminId) {
-          // Get last message in this user's private admin chat
-          const { data: adminMsgs } = await supabase
-            .from('messages')
-            .select('*')
-            .eq('receiver_type', 'admin')
-            .eq('receiver_id', user.id) // Private chat uses user's own ID as receiver
-            .order('created_at', { ascending: false })
-            .limit(1);
-
-          const lastAdminMsg = adminMsgs?.[0] ? {
-            ...adminMsgs[0],
-            receiver_type: adminMsgs[0].receiver_type as 'admin' | 'group',
-          } : undefined;
-
-          threadList.push({
-            id: user.id, // Use user's own ID for private admin chat
-            type: 'admin',
-            name: 'Admin Support',
-            lastMessage: lastAdminMsg,
-            unreadCount: 0,
-            isAdmin: true,
-          });
-        }
+        const lastAdminMsg = lastMessageMap.get(user.id);
+        threadList.push({
+          id: user.id, // Use user's own ID for private admin chat
+          type: 'admin',
+          name: 'Admin Support',
+          lastMessage: lastAdminMsg,
+          unreadCount: 0,
+          isAdmin: true,
+        });
       }
 
       // Senior roles can see all groups; normal users only see groups they belong to.
@@ -98,21 +98,10 @@ export function useMessages() {
           .from('groups')
           .select('id, name, is_broadcast')
           .order('created_at', { ascending: false });
+
         for (const group of groupsData || []) {
           if (group) {
-            const { data: groupMsgs } = await supabase
-              .from('messages')
-              .select('*')
-              .eq('receiver_type', 'group')
-              .eq('receiver_id', group.id)
-              .order('created_at', { ascending: false })
-              .limit(1);
-
-            const lastGroupMsg = groupMsgs?.[0] ? {
-              ...groupMsgs[0],
-              receiver_type: groupMsgs[0].receiver_type as 'admin' | 'group',
-            } : undefined;
-
+            const lastGroupMsg = lastMessageMap.get(group.id);
             threadList.push({
               id: group.id,
               type: 'group',
@@ -133,19 +122,7 @@ export function useMessages() {
           for (const membership of memberships) {
             const group = membership.groups as unknown as { id: string; name: string; is_broadcast: boolean };
             if (group) {
-              const { data: groupMsgs } = await supabase
-                .from('messages')
-                .select('*')
-                .eq('receiver_type', 'group')
-                .eq('receiver_id', group.id)
-                .order('created_at', { ascending: false })
-                .limit(1);
-
-              const lastGroupMsg = groupMsgs?.[0] ? {
-                ...groupMsgs[0],
-                receiver_type: groupMsgs[0].receiver_type as 'admin' | 'group',
-              } : undefined;
-
+              const lastGroupMsg = lastMessageMap.get(group.id);
               threadList.push({
                 id: group.id,
                 type: 'group',
@@ -161,16 +138,11 @@ export function useMessages() {
 
       // Member+ badges can inspect all user support chats; admins/sub-admins keep full visibility.
       if (roleLevel >= 40) {
-        // Get all non-admin users
-        const { data: allProfiles } = await supabase
-          .from('profiles')
-          .select('id, display_name, email');
-
-        // Get admin role users to filter them out
-        const { data: adminRoles } = await supabase
-          .from('user_roles')
-          .select('user_id')
-          .eq('role', 'admin');
+        // Parallel fetch profiles and admin roles
+        const [{ data: allProfiles }, { data: adminRoles }] = await Promise.all([
+          supabase.from('profiles').select('id, display_name, email'),
+          supabase.from('user_roles').select('user_id').eq('role', 'admin'),
+        ]);
 
         const adminUserIds = new Set(adminRoles?.map(r => r.user_id) || []);
 
@@ -179,20 +151,7 @@ export function useMessages() {
             // Skip admin users and current user
             if (adminUserIds.has(profile.id) || profile.id === user.id) continue;
 
-            // Get last message for this user's private chat
-            const { data: userMsgs } = await supabase
-              .from('messages')
-              .select('*')
-              .eq('receiver_type', 'admin')
-              .eq('receiver_id', profile.id)
-              .order('created_at', { ascending: false })
-              .limit(1);
-
-            const lastUserMsg = userMsgs?.[0] ? {
-              ...userMsgs[0],
-              receiver_type: userMsgs[0].receiver_type as 'admin' | 'group',
-            } : undefined;
-
+            const lastUserMsg = lastMessageMap.get(profile.id);
             threadList.push({
               id: profile.id,
               type: 'admin',
@@ -221,7 +180,7 @@ export function useMessages() {
     } finally {
       setLoading(false);
     }
-  }, [user, isAdmin, roleLevel, getAdminId]);
+  }, [user, isAdmin, roleLevel]);
 
   // Fetch messages for active thread
   const fetchMessages = useCallback(async () => {
@@ -343,12 +302,26 @@ export function useMessages() {
     activeThreadRef.current = activeThread;
   }, [activeThread]);
 
+  // Use refs to avoid reconnection loops on every state change
+  const fetchThreadsRef = useRef(fetchThreads);
+  useEffect(() => {
+    fetchThreadsRef.current = fetchThreads;
+  }, [fetchThreads]);
+
+  const profileCache = useRef<Map<string, { id: string; display_name: string | null; email: string }>>(new Map());
+
   // Set up realtime subscription
   useEffect(() => {
     if (!user) return;
 
+    const channelName = `messages-realtime-${user.id}`;
+    const existing = supabase.getChannels().find((c) => c.topic === `realtime:${channelName}`);
+    if (existing) {
+      supabase.removeChannel(existing);
+    }
+
     const channel = supabase
-      .channel('messages-realtime')
+      .channel(channelName)
       .on(
         'postgres_changes',
         {
@@ -359,12 +332,20 @@ export function useMessages() {
         async (payload) => {
           const newMsg = payload.new as Message;
 
-          // Get sender profile
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('id, display_name, email')
-            .eq('id', newMsg.sender_id)
-            .maybeSingle();
+          // Check profile cache before querying database
+          let profile = profileCache.current.get(newMsg.sender_id);
+          if (!profile) {
+            const { data } = await supabase
+              .from('profiles')
+              .select('id, display_name, email')
+              .eq('id', newMsg.sender_id)
+              .maybeSingle();
+
+            if (data) {
+              profile = data;
+              profileCache.current.set(newMsg.sender_id, data);
+            }
+          }
 
           const messageWithSender: Message = {
             ...newMsg,
@@ -395,8 +376,8 @@ export function useMessages() {
             return prev;
           });
 
-          // Refresh threads to update last message
-          fetchThreads();
+          // Refresh threads without triggering channel recreation
+          fetchThreadsRef.current();
         }
       )
       .subscribe();
@@ -404,7 +385,7 @@ export function useMessages() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user, fetchThreads]);
+  }, [user]);
 
   // Fetch threads on mount
   useEffect(() => {

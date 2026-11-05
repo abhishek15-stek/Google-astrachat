@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Download, Copy, X, RotateCw } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
@@ -73,6 +73,8 @@ export function MediaLightbox({ url, type, open, onClose, onResend }: MediaLight
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-5xl w-[95vw] p-0 bg-black/95 border-none">
+        <DialogTitle className="sr-only">Media Preview</DialogTitle>
+        <DialogDescription className="sr-only">Full-screen view of media attachment</DialogDescription>
         <div className="relative flex items-center justify-center min-h-[60vh] max-h-[85vh] overflow-hidden">
           {loadFailed ? (
             <div className="flex max-w-sm flex-col items-center gap-4 px-6 py-12 text-center text-white">

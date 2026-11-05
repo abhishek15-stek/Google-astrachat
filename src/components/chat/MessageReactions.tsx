@@ -138,9 +138,15 @@ export function useMessageReactions(messageId: string) {
   React.useEffect(() => {
     fetchReactions();
 
-    // Subscribe to realtime changes
+    // Subscribe to realtime changes with channel deduplication
+    const channelName = `reactions-${messageId}`;
+    const existing = supabase.getChannels().find((c) => c.topic === `realtime:${channelName}`);
+    if (existing) {
+      supabase.removeChannel(existing);
+    }
+
     const channel = supabase
-      .channel(`reactions-${messageId}`)
+      .channel(channelName)
       .on(
         'postgres_changes',
         {

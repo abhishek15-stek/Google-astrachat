@@ -17,7 +17,7 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Switch } from '@/components/ui/switch';
 import { useScreenShare } from '@/hooks/useScreenShare';
@@ -135,8 +135,8 @@ export function LiveScreenShare({ receiverId, receiverName, isOpen, onClose }: L
               </Avatar>
             </div>
             <div className="text-center">
-              <h3 className="text-xl font-bold">Incoming Screen Share</h3>
-              <p className="text-muted-foreground text-sm mt-1">Someone wants to share their screen…</p>
+              <DialogTitle className="text-xl font-bold">Incoming Screen Share</DialogTitle>
+              <DialogDescription className="text-muted-foreground text-sm mt-1">Someone wants to share their screen…</DialogDescription>
             </div>
             <div className="flex gap-8">
               <div className="flex flex-col items-center gap-2">
@@ -177,11 +177,11 @@ export function LiveScreenShare({ receiverId, receiverName, isOpen, onClose }: L
               <Monitor className="h-5 w-5 text-primary" />
             </div>
             <div className="flex-1 min-w-0">
-              <h2 className="text-lg font-semibold leading-tight">Share your screen</h2>
+              <DialogTitle className="text-lg font-semibold leading-tight">Share your screen</DialogTitle>
               {receiverName && (
-                <p className="text-xs text-muted-foreground truncate">
+                <DialogDescription className="text-xs text-muted-foreground truncate">
                   Sharing with <span className="font-medium text-foreground">{receiverName}</span>
-                </p>
+                </DialogDescription>
               )}
             </div>
             <span
@@ -302,6 +302,8 @@ export function LiveScreenShare({ receiverId, receiverName, isOpen, onClose }: L
       {/* Viewer dialog – when receiving a share */}
       <Dialog open={isViewing && !!remoteStream} onOpenChange={(open) => { if (!open) endShare(); }}>
         <DialogContent className="sm:max-w-4xl p-0 overflow-hidden bg-black border-0">
+          <DialogTitle className="sr-only">Live Screen Share Viewer</DialogTitle>
+          <DialogDescription className="sr-only">Active remote screen stream</DialogDescription>
           <div className="relative aspect-video bg-black">
             <video ref={viewerRef} autoPlay playsInline className="w-full h-full object-contain" />
             <div className="absolute top-4 left-4 flex items-center gap-2 bg-red-600 text-white px-3 py-1 rounded-full text-sm">

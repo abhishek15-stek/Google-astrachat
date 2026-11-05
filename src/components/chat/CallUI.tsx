@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
 
@@ -53,10 +53,10 @@ export function IncomingCallScreen({ callerName, callType, onAccept, onReject }:
           </div>
 
           <div className="text-center">
-            <h3 className="text-xl font-bold">{callerName}</h3>
-            <p className="text-muted-foreground text-sm mt-1">
+            <DialogTitle className="text-xl font-bold">{callerName}</DialogTitle>
+            <DialogDescription className="text-muted-foreground text-sm mt-1">
               Incoming {callType} call...
-            </p>
+            </DialogDescription>
           </div>
 
           <motion.div
@@ -131,14 +131,16 @@ export function OutgoingCallScreen({ receiverName, callType, onCancel }: Outgoin
           </motion.div>
 
           <div className="text-center">
-            <h3 className="text-xl font-bold">{receiverName}</h3>
-            <motion.p
-              animate={{ opacity: [0.5, 1, 0.5] }}
-              transition={{ duration: 1.5, repeat: Infinity }}
-              className="text-muted-foreground text-sm mt-1"
-            >
-              Calling...
-            </motion.p>
+            <DialogTitle className="text-xl font-bold">{receiverName}</DialogTitle>
+            <DialogDescription asChild>
+              <motion.p
+                animate={{ opacity: [0.5, 1, 0.5] }}
+                transition={{ duration: 1.5, repeat: Infinity }}
+                className="text-muted-foreground text-sm mt-1"
+              >
+                Calling...
+              </motion.p>
+            </DialogDescription>
           </div>
 
           <div className="flex flex-col items-center gap-2">

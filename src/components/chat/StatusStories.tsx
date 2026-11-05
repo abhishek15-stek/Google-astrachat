@@ -118,9 +118,27 @@ export function StatusStories() {
       <ScrollArea className="w-full whitespace-nowrap">
         <div className="flex gap-3 pb-2 px-1">
           {/* My Status / Add Status */}
-          <button
-            onClick={() => myStatus.length > 0 ? viewStatus(user!.id) : setIsCreateOpen(true)}
-            className="flex flex-col items-center gap-1 min-w-[60px]"
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              if (myStatus.length > 0) {
+                viewStatus(user!.id);
+              } else {
+                setIsCreateOpen(true);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                if (myStatus.length > 0) {
+                  viewStatus(user!.id);
+                } else {
+                  setIsCreateOpen(true);
+                }
+              }
+            }}
+            className="flex flex-col items-center gap-1 min-w-[60px] cursor-pointer"
           >
             <div className={cn(
               "relative w-14 h-14 rounded-full flex items-center justify-center",
@@ -139,17 +157,19 @@ export function StatusStories() {
                 <Plus className="h-6 w-6 text-muted-foreground" />
               )}
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   setIsCreateOpen(true);
                 }}
-                className="absolute -bottom-1 -right-1 h-5 w-5 rounded-full bg-primary text-white flex items-center justify-center"
+                aria-label="Create status"
+                className="absolute -bottom-1 -right-1 h-5 w-5 rounded-full bg-primary text-white flex items-center justify-center hover:opacity-90 transition-opacity"
               >
                 <Plus className="h-3 w-3" />
               </button>
             </div>
             <span className="text-[10px] text-muted-foreground">My Status</span>
-          </button>
+          </div>
 
           {/* Other Users' Statuses */}
           {Object.entries(groupedStatuses).map(([userId, userStatuses]) => (
@@ -363,6 +383,7 @@ function StatusViewerDialog({
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-md p-0 overflow-hidden bg-black">
+        <DialogTitle className="sr-only">Status Story</DialogTitle>
         {/* Progress bars */}
         <div className="absolute top-0 left-0 right-0 flex gap-1 p-2 z-10">
           {statuses.map((_, idx) => (

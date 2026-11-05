@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/hooks/useAuth";
 import { ThemeProvider } from "@/hooks/useTheme";
+import { ScreenShareProvider } from "@/hooks/useScreenShare";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Admin from "./pages/Admin";
@@ -16,18 +17,20 @@ const App = () => (
   <QueryClientProvider client={queryClient}>
     <ThemeProvider>
       <AuthProvider>
-        <TooltipProvider>
-          <Toaster />
-          <Sonner />
-          <BrowserRouter>
-            <Routes>
-              <Route path="/" element={<Index />} />
-              <Route path="/auth" element={<Auth />} />
-              <Route path="/admin" element={<Admin />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </BrowserRouter>
-        </TooltipProvider>
+        <ScreenShareProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Sonner />
+            <BrowserRouter>
+              <Routes>
+                <Route path="/" element={<Index />} />
+                <Route path="/auth" element={<Auth />} />
+                <Route path="/admin" element={<Admin />} />
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </BrowserRouter>
+          </TooltipProvider>
+        </ScreenShareProvider>
       </AuthProvider>
     </ThemeProvider>
   </QueryClientProvider>

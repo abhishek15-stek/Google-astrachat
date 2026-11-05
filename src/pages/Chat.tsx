@@ -315,6 +315,10 @@ export default function Chat() {
     const presenceInterval = setInterval(updatePresence, 30000);
 
     // Listen for profile changes to track online status
+    const existingPresence = supabase.getChannels().find((c) => c.topic === 'realtime:presence-tracking');
+    if (existingPresence) {
+      supabase.removeChannel(existingPresence);
+    }
     const channel = supabase
       .channel('presence-tracking')
       .on(

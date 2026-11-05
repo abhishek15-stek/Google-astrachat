@@ -1,0 +1,8 @@
+{
+  "name": "Astrachat",
+  "description": "Modern real-time chat application with AI assistant features, multimedia sharing, and group management.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
