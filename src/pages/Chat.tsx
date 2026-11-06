@@ -11,6 +11,7 @@ import { FileUpload } from '@/components/chat/FileUpload';
 import { ProfileSettings } from '@/components/chat/ProfileSettings';
 import { AIAssistant } from '@/components/chat/AIAssistant';
 import { AIChatThread } from '@/components/chat/AIChatThread';
+import { useAIChat } from '@/hooks/useAIChat';
 import { MessageReactions, useMessageReactions } from '@/components/chat/MessageReactions';
 import { ReadReceipts, useMarkAsRead } from '@/components/chat/ReadReceipts';
 import { WallpaperPickerDialog, useWallpaperPicker } from '@/components/chat/ChatWallpaper';
@@ -231,6 +232,8 @@ function MessageBubble({
 export default function Chat() {
   const { user, isAdmin, canAccessDashboard, signOut } = useAuth();
   const { threads, messages, activeThread, setActiveThread, sendMessage, loading } = useMessages();
+  const { messages: aiMessages } = useAIChat();
+  const latestAiMessage = aiMessages.length > 0 ? aiMessages[aiMessages.length - 1] : null;
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -830,9 +833,13 @@ export default function Chat() {
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-semibold truncate text-sm">{thread.name}</span>
                           {thread.type === 'ai' && (
-                            <span className="text-xs">🤖</span>
+                            <span className="text-[11px] text-muted-foreground flex-shrink-0">
+                              {latestAiMessage
+                                ? format(new Date(latestAiMessage.created_at), 'HH:mm')
+                                : '🤖'}
+                            </span>
                           )}
-                          {thread.lastMessage && (
+                          {thread.type !== 'ai' && thread.lastMessage && (
                             <span className="text-[11px] text-muted-foreground flex-shrink-0">
                               {format(new Date(thread.lastMessage.created_at), 'HH:mm')}
                             </span>
@@ -840,7 +847,9 @@ export default function Chat() {
                         </div>
                         {thread.type === 'ai' ? (
                           <p className="text-xs text-muted-foreground truncate mt-0.5">
-                            Your personal AI assistant
+                            {latestAiMessage
+                              ? `${latestAiMessage.role === 'user' ? 'You: ' : 'AstraBot: '}${latestAiMessage.content}`
+                              : 'Your personal AI assistant'}
                           </p>
                         ) : thread.lastMessage && (
                           <p className="text-xs text-muted-foreground truncate mt-0.5">

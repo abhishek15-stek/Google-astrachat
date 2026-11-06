@@ -4,8 +4,8 @@
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 export const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
-export const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-export const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+export const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+export const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
 export const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -14,6 +14,7 @@ export const MODELS = {
   // Keep "advanced" on Flash by default: Pro quota is unreliable on free-tier keys and was breaking admin AI.
   advanced: "gemini-2.5-flash",
   fallback: "gemini-2.5-flash-lite",
+  latest: "gemini-flash-latest",
   image: "gemini-2.5-flash-image",
 };
 
@@ -26,17 +27,43 @@ export const corsHeaders = {
 export type Kind = "text" | "image" | "video" | "file" | "advanced";
 
 export function admin(): SupabaseClient {
-  return createClient(SUPABASE_URL, SERVICE_KEY);
+  return createClient(SUPABASE_URL, SERVICE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
 }
 
 export async function authUser(req: Request) {
   const authHeader = req.headers.get("Authorization") ?? "";
   if (!authHeader.startsWith("Bearer ")) return null;
-  const userClient = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_ANON_KEY")!, {
-    global: { headers: { Authorization: authHeader } },
-  });
-  const { data } = await userClient.auth.getUser();
-  return data.user ?? null;
+  const token = authHeader.slice("Bearer ".length).trim();
+  if (!token) return null;
+
+  // Primary: validate JWT directly via service role client (does not depend on SUPABASE_ANON_KEY env)
+  try {
+    if (SUPABASE_URL && SERVICE_KEY) {
+      const { data, error } = await admin().auth.getUser(token);
+      if (!error && data?.user) return data.user;
+    }
+  } catch (e) {
+    console.warn("Service role getUser fallback:", e);
+  }
+
+  // Secondary fallback: use SUPABASE_ANON_KEY if present
+  try {
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_PUBLISHABLE_KEY") || SERVICE_KEY;
+    if (SUPABASE_URL && anonKey) {
+      const userClient = createClient(SUPABASE_URL, anonKey, {
+        global: { headers: { Authorization: authHeader } },
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const { data } = await userClient.auth.getUser();
+      if (data?.user) return data.user;
+    }
+  } catch (e) {
+    console.warn("Anon client getUser fallback:", e);
+  }
+
+  return null;
 }
 
 // Credits/limits fully disabled per product decision: single sustainable model, unlimited use for everyone.
@@ -90,23 +117,31 @@ export interface GeminiResult {
 }
 
 // Core Gemini call. Returns text and (for image models) inline base64 images.
-export async function callGemini(model: string, contents: GeminiContent[], systemInstruction?: string, opts?: { responseModalities?: string[] }): Promise<GeminiResult> {
+export async function callGemini(
+  model: string,
+  contents: GeminiContent[],
+  systemInstruction?: string,
+  opts?: { responseModalities?: string[] }
+): Promise<GeminiResult> {
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY not configured");
   let activeModel = model === "gemini-2.5-pro" ? MODELS.advanced : model;
   const body: Record<string, unknown> = { contents };
   if (systemInstruction) body.systemInstruction = { parts: [{ text: systemInstruction }] };
   if (opts?.responseModalities) body.generationConfig = { responseModalities: opts.responseModalities };
 
-  const request = (nextModel: string) => fetch(`${GEMINI_BASE}/models/${nextModel}:generateContent?key=${GEMINI_API_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const request = (nextModel: string) =>
+    fetch(`${GEMINI_BASE}/models/${nextModel}:generateContent?key=${GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
 
   let r = await request(activeModel);
-  // Fallback: exhausted/blocked models must not break chat; retry medium → lite for text/multimodal.
-  if (!r.ok && (r.status === 429 || r.status === 403) && !opts?.responseModalities) {
-    const fallbacks = [MODELS.fast, MODELS.fallback].filter((m, i, arr) => m !== activeModel && arr.indexOf(m) === i);
+  // Fallback across all supported text models on any model/quota/availability error
+  if (!r.ok && !opts?.responseModalities) {
+    const fallbacks = [MODELS.fast, MODELS.fallback, MODELS.latest].filter(
+      (m, i, arr) => m !== activeModel && arr.indexOf(m) === i
+    );
     for (const nextModel of fallbacks) {
       console.warn(`Gemini ${activeModel} failed ${r.status}, falling back to ${nextModel}`);
       activeModel = nextModel;
@@ -125,7 +160,7 @@ export async function callGemini(model: string, contents: GeminiContent[], syste
   for (const p of parts) {
     if (typeof p.text === "string") text += p.text;
     if (p.inline_data?.data) images.push(p.inline_data.data);
-    if (p.inlineData?.data) images.push(p.inlineData.data); // tolerate camelCase
+    if (p.inlineData?.data) images.push(p.inlineData.data);
   }
   return {
     text: text.trim(),
@@ -137,28 +172,46 @@ export async function callGemini(model: string, contents: GeminiContent[], syste
 }
 
 // Convenience: simple chat-style call
-export async function geminiChat(messages: { role: "user" | "assistant"; content: string }[], system: string, advanced = false): Promise<GeminiResult> {
-  const contents: GeminiContent[] = messages.map((m) => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content }],
-  }));
+export async function geminiChat(
+  messages: { role: "user" | "assistant"; content: string }[],
+  system: string,
+  advanced = false
+): Promise<GeminiResult> {
+  const contents: GeminiContent[] = messages
+    .filter((m) => m.content && m.content.trim().length > 0)
+    .map((m) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }],
+    }));
   return callGemini(advanced ? MODELS.advanced : MODELS.fast, contents, system);
 }
 
 // Multimodal call (image/video/file analysis)
-export async function geminiMultimodal(prompt: string, mediaB64: string, mimeType: string, system?: string, advanced = false): Promise<GeminiResult> {
-  const contents: GeminiContent[] = [{
-    role: "user",
-    parts: [
-      { text: prompt },
-      { inline_data: { mime_type: mimeType, data: mediaB64 } },
-    ],
-  }];
+export async function geminiMultimodal(
+  prompt: string,
+  mediaB64: string,
+  mimeType: string,
+  system?: string,
+  advanced = false
+): Promise<GeminiResult> {
+  const contents: GeminiContent[] = [
+    {
+      role: "user",
+      parts: [
+        { text: prompt },
+        { inline_data: { mime_type: mimeType, data: mediaB64 } },
+      ],
+    },
+  ];
   return callGemini(advanced ? MODELS.advanced : MODELS.fast, contents, system);
 }
 
 // Image generation/editing via gemini-2.5-flash-image (Nano Banana)
-export async function geminiImage(prompt: string, refImageB64?: string, refMime = "image/png"): Promise<GeminiResult> {
+export async function geminiImage(
+  prompt: string,
+  refImageB64?: string,
+  refMime = "image/png"
+): Promise<GeminiResult> {
   const parts: GeminiPart[] = [{ text: prompt }];
   if (refImageB64) parts.push({ inline_data: { mime_type: refMime, data: refImageB64 } });
   const contents: GeminiContent[] = [{ role: "user", parts }];
@@ -188,5 +241,8 @@ export async function urlToBase64(url: string): Promise<{ data: string; mime: st
 }
 
 export function jsonResponse(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
 }

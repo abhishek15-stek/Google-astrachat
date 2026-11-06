@@ -16,24 +16,48 @@ export type Database = {
     Tables: {
       ai_conversations: {
         Row: {
+          client_message_id?: string | null
           content: string
+          conversation_id?: string
           created_at: string
+          error_message?: string | null
           id: string
+          metadata?: Json | null
+          personality?: string | null
           role: string
+          status?: string
+          title?: string | null
+          updated_at?: string
           user_id: string
         }
         Insert: {
+          client_message_id?: string | null
           content: string
+          conversation_id?: string
           created_at?: string
+          error_message?: string | null
           id?: string
+          metadata?: Json | null
+          personality?: string | null
           role: string
+          status?: string
+          title?: string | null
+          updated_at?: string
           user_id: string
         }
         Update: {
+          client_message_id?: string | null
           content?: string
+          conversation_id?: string
           created_at?: string
+          error_message?: string | null
           id?: string
+          metadata?: Json | null
+          personality?: string | null
           role?: string
+          status?: string
+          title?: string | null
+          updated_at?: string
           user_id?: string
         }
         Relationships: []

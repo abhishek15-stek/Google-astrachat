@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Bot, Search, RefreshCw, User, Download, MessageCircle, Calendar } from 'lucide-react';
 import { format } from 'date-fns';
+import { stripAstraMeta } from '@/lib/aiConversationStore';
 
 interface AIConversation {
   id: string;
@@ -122,6 +123,7 @@ export function AIConversationsViewer() {
 
       const convosWithUser = data?.map(c => ({
         ...c,
+        content: stripAstraMeta(c.content),
         user: profile || undefined,
       })) || [];
 

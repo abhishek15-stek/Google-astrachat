@@ -1,79 +1,82 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Bot, Send, Loader2, Sparkles, X, Minimize2, Maximize2, Settings2, Heart, Briefcase, Star, Leaf } from 'lucide-react';
+import {
+  Bot,
+  Send,
+  Loader2,
+  Sparkles,
+  X,
+  Minimize2,
+  Maximize2,
+  Heart,
+  Briefcase,
+  Star,
+  Leaf,
+  RefreshCw,
+  AlertCircle,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  DropdownMenuSeparator,
-  DropdownMenuLabel,
-} from '@/components/ui/dropdown-menu';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { useAIChat } from '@/hooks/useAIChat';
+import { AIPersonality } from '@/lib/aiConversationStore';
 import { cn } from '@/lib/utils';
 import { FeedbackRequest } from './FeedbackRequest';
 import { motion, AnimatePresence } from 'framer-motion';
 
-interface AIMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'feedback';
-  content: string;
-  timestamp: Date;
-  feedbackData?: {
-    requestId: string;
-    question: string;
-    questionType: 'star_rating' | 'options' | 'mixed';
-    options?: string[];
-  };
-}
-
-type AIPersonality = 'assistant' | 'friend' | 'technical' | 'creative' | 'stressRelief';
-
-const PERSONALITY_CONFIG: Record<AIPersonality, { name: string; icon: React.ReactNode; emoji: string; description: string }> = {
-  assistant: { 
-    name: 'AstraBot', 
-    icon: <Bot className="h-4 w-4" />, 
+const PERSONALITY_CONFIG: Record<
+  AIPersonality,
+  { name: string; icon: React.ReactNode; emoji: string; description: string }
+> = {
+  assistant: {
+    name: 'AstraBot',
+    icon: <Bot className="h-4 w-4" />,
     emoji: '🤖',
-    description: 'Professional AI assistant'
+    description: 'Professional AI assistant',
   },
-  friend: { 
-    name: 'Astra Friend', 
-    icon: <Heart className="h-4 w-4" />, 
+  friend: {
+    name: 'Astra Friend',
+    icon: <Heart className="h-4 w-4" />,
     emoji: '💕',
-    description: 'Friendly companion chat'
+    description: 'Friendly companion chat',
   },
-  technical: { 
-    name: 'Tech Support', 
-    icon: <Briefcase className="h-4 w-4" />, 
+  technical: {
+    name: 'Tech Support',
+    icon: <Briefcase className="h-4 w-4" />,
     emoji: '🔧',
-    description: 'AstraChat technical help'
+    description: 'AstraChat technical help',
   },
-  creative: { 
-    name: 'Creative AI', 
-    icon: <Sparkles className="h-4 w-4" />, 
+  creative: {
+    name: 'Creative AI',
+    icon: <Sparkles className="h-4 w-4" />,
     emoji: '✨',
-    description: 'Creative content generator'
+    description: 'Creative content generator',
   },
-  stressRelief: { 
-    name: 'Stress Relief', 
-    icon: <Leaf className="h-4 w-4" />, 
+  stressRelief: {
+    name: 'Stress Relief',
+    icon: <Leaf className="h-4 w-4" />,
     emoji: '🧘',
-    description: 'Vent & relax (Hindi/English)'
+    description: 'Vent & relax (Hindi/English)',
   },
 };
 
 export function AIAssistant() {
-  const { user, isAdmin } = useAuth();
+  const { user } = useAuth();
+  const {
+    messages,
+    personality,
+    isGenerating,
+    sendMessage,
+    retryMessage,
+    clearAllConversations,
+    appendAssistantSystemMessage,
+  } = useAIChat();
+
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
-  const [messages, setMessages] = useState<AIMessage[]>([]);
   const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [personality, setPersonality] = useState<AIPersonality>('assistant');
   const [pendingFeedback, setPendingFeedback] = useState<{
     requestId: string;
     question: string;
@@ -83,80 +86,55 @@ export function AIAssistant() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const currentConfig = PERSONALITY_CONFIG[personality];
+  const currentConfig = PERSONALITY_CONFIG[personality] || PERSONALITY_CONFIG.assistant;
 
-  // Load conversation history and check for pending feedback
+  // Check for pending feedback when opened
   useEffect(() => {
-    if (user && isOpen) {
-      loadConversationHistory();
+    if (user?.id && isOpen) {
       checkPendingFeedback();
     }
-  }, [user, isOpen]);
+  }, [user?.id, isOpen]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
-
-  const loadConversationHistory = async () => {
-    if (!user) return;
-    
-    const { data, error } = await supabase
-      .from('ai_conversations')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: true })
-      .limit(50);
-
-    if (data && !error) {
-      setMessages(data.map(msg => ({
-        id: msg.id,
-        role: msg.role as 'user' | 'assistant',
-        content: msg.content,
-        timestamp: new Date(msg.created_at),
-      })));
-    }
-  };
+  }, [messages.length, isOpen]);
 
   const checkPendingFeedback = async () => {
-    if (!user) return;
-    
-    const { data, error } = await supabase
-      .from('feedback_requests')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('is_answered', false)
-      .order('created_at', { ascending: false })
-      .limit(1);
+    if (!user?.id) return;
+    try {
+      const { data, error } = await supabase
+        .from('feedback_requests')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('is_answered', false)
+        .order('created_at', { ascending: false })
+        .limit(1);
 
-    if (data && data.length > 0 && !error) {
-      const request = data[0];
-      setPendingFeedback({
-        requestId: request.id,
-        question: request.question,
-        questionType: request.question_type as 'star_rating' | 'options' | 'mixed',
-        options: Array.isArray(request.options) ? request.options as string[] : undefined,
-      });
+      if (data && data.length > 0 && !error) {
+        const request = data[0];
+        setPendingFeedback({
+          requestId: request.id,
+          question: request.question,
+          questionType: request.question_type as 'star_rating' | 'options' | 'mixed',
+          options: Array.isArray(request.options) ? (request.options as string[]) : undefined,
+        });
+      }
+    } catch {
+      // ignore
     }
   };
 
-  const saveMessage = async (role: 'user' | 'assistant', content: string) => {
-    if (!user) return;
-    
-    await supabase.from('ai_conversations').insert({
-      user_id: user.id,
-      role,
-      content,
-    });
-  };
-
-  const handleFeedbackSubmit = async (response: { starRating?: number; selectedOption?: string; textResponse?: string }) => {
+  const handleFeedbackSubmit = async (response: {
+    starRating?: number;
+    selectedOption?: string;
+    textResponse?: string;
+  }) => {
     if (!user || !pendingFeedback) return;
 
     try {
-      // Save the feedback response
       await supabase.from('feedback_responses').insert({
         request_id: pendingFeedback.requestId,
         user_id: user.id,
@@ -165,22 +143,16 @@ export function AIAssistant() {
         text_response: response.textResponse,
       });
 
-      // Mark the request as answered
       await supabase
         .from('feedback_requests')
         .update({ is_answered: true })
         .eq('id', pendingFeedback.requestId);
 
-      // Add thank you message
-      const thankYouMessage: AIMessage = {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: `Thank you for your feedback! ${response.starRating ? `You rated us ${response.starRating} stars ⭐` : ''} ${response.selectedOption ? `(${response.selectedOption})` : ''} Your input helps us improve AstraChat! 💖`,
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, thankYouMessage]);
-      await saveMessage('assistant', thankYouMessage.content);
+      const thankYouContent = `Thank you for your feedback! ${
+        response.starRating ? `You rated us ${response.starRating} stars ⭐` : ''
+      } ${response.selectedOption ? `(${response.selectedOption})` : ''} Your input helps us improve AstraChat! 💖`;
 
+      await appendAssistantSystemMessage(thankYouContent);
       setPendingFeedback(null);
     } catch (error) {
       console.error('Error submitting feedback:', error);
@@ -192,81 +164,18 @@ export function AIAssistant() {
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading || !user) return;
-
-    const userMessage: AIMessage = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: input.trim(),
-      timestamp: new Date(),
-    };
-
-    setMessages(prev => [...prev, userMessage]);
+    if (!input.trim() || !user) return;
+    const text = input.trim();
     setInput('');
-    setIsLoading(true);
-
-    // Save user message
-    await saveMessage('user', userMessage.content);
-
-    try {
-      const conversationHistory = messages.slice(-10).map(m => ({
-        role: m.role === 'feedback' ? 'assistant' : m.role,
-        content: m.content,
-      }));
-
-      const { data, error } = await supabase.functions.invoke('ai-chat', {
-        body: {
-          message: userMessage.content,
-          type: 'chat',
-          personality,
-          conversationHistory,
-          isAdmin,
-          userId: user.id,
-        },
-      });
-
-      if (error) throw error;
-
-      const assistantMessage: AIMessage = {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: data.response || "I couldn't process that request.",
-        timestamp: new Date(),
-      };
-
-      setMessages(prev => [...prev, assistantMessage]);
-      await saveMessage('assistant', assistantMessage.content);
-    } catch (error) {
-      console.error('AI chat error:', error);
-      const errorMessage: AIMessage = {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: "Sorry, I'm having trouble connecting right now. Please try again later. 🔧",
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
-      inputRef.current?.focus();
-    }
+    await sendMessage({ content: text });
+    inputRef.current?.focus();
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
-  };
-
-  const clearHistory = async () => {
-    if (!user) return;
-    
-    await supabase
-      .from('ai_conversations')
-      .delete()
-      .eq('user_id', user.id);
-    
-    setMessages([]);
   };
 
   const getWelcomeMessage = () => {
@@ -318,10 +227,10 @@ export function AIAssistant() {
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 20, scale: 0.95 }}
       className={cn(
-        "fixed z-50 bg-card border border-border rounded-2xl shadow-elevated transition-all duration-300",
+        'fixed z-50 bg-card border border-border rounded-2xl shadow-elevated transition-all duration-300',
         isMinimized
-          ? "bottom-20 right-4 w-72 h-14"
-          : "bottom-20 right-4 w-80 sm:w-96 h-[500px] max-h-[70vh]"
+          ? 'bottom-20 right-4 w-72 h-14'
+          : 'bottom-20 right-4 w-80 sm:w-96 h-[500px] max-h-[70vh]'
       )}
     >
       {/* Header */}
@@ -341,8 +250,6 @@ export function AIAssistant() {
           </div>
         </div>
         <div className="flex items-center gap-1">
-          {/* Single AI model — no personality/model selector (unlimited use) */}
-
           <Button
             variant="ghost"
             size="icon"
@@ -366,7 +273,6 @@ export function AIAssistant() {
         <>
           {/* Messages */}
           <ScrollArea className="flex-1 h-[calc(100%-120px)] p-3" ref={scrollRef}>
-            {/* Pending Feedback Request */}
             <AnimatePresence>
               {pendingFeedback && (
                 <motion.div
@@ -395,109 +301,24 @@ export function AIAssistant() {
                 <p className="text-sm text-muted-foreground mt-2 max-w-[250px]">
                   {getWelcomeMessage()}
                 </p>
-                
-                {/* Quick Suggestions */}
+
                 <div className="mt-4 flex flex-wrap gap-2 justify-center">
-                  {personality === 'technical' && (
-                    <>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="text-xs"
-                        onClick={() => setInput("I can't send messages")}
-                      >
-                        Can't send messages
-                      </Button>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="text-xs"
-                        onClick={() => setInput("How do I change my profile?")}
-                      >
-                        Change profile
-                      </Button>
-                    </>
-                  )}
-                  {personality === 'creative' && (
-                    <>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="text-xs"
-                        onClick={() => setInput("Write me a short story")}
-                      >
-                        Write a story
-                      </Button>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="text-xs"
-                        onClick={() => setInput("Give me content ideas")}
-                      >
-                        Content ideas
-                      </Button>
-                    </>
-                  )}
-                  {personality === 'friend' && (
-                    <>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="text-xs"
-                        onClick={() => setInput("Tell me a joke")}
-                      >
-                        Tell a joke
-                      </Button>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="text-xs"
-                        onClick={() => setInput("How's your day?")}
-                      >
-                        Chat
-                      </Button>
-                    </>
-                  )}
-                  {personality === 'assistant' && (
-                    <>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="text-xs"
-                        onClick={() => setInput("What can you do?")}
-                      >
-                        What can you do?
-                      </Button>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="text-xs"
-                        onClick={() => setInput("Help me with something")}
-                      >
-                        Get help
-                      </Button>
-                    </>
-                  )}
-                  {personality === 'stressRelief' && (
-                    <>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="text-xs"
-                        onClick={() => setInput("Bahut frustration ho raha hai")}
-                      >
-                        I'm frustrated 😤
-                      </Button>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="text-xs"
-                        onClick={() => setInput("Help me relax")}
-                      >
-                        Help me relax 🧘
-                      </Button>
-                    </>
-                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => setInput('What can you do?')}
+                  >
+                    What can you do?
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => setInput('Help me with something')}
+                  >
+                    Get help
+                  </Button>
                 </div>
               </div>
             ) : (
@@ -508,13 +329,13 @@ export function AIAssistant() {
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     className={cn(
-                      "flex",
-                      msg.role === 'user' ? 'justify-end' : 'justify-start'
+                      'flex flex-col',
+                      msg.role === 'user' ? 'items-end' : 'items-start'
                     )}
                   >
                     <div
                       className={cn(
-                        "max-w-[85%] rounded-2xl px-3 py-2 text-sm",
+                        'max-w-[85%] rounded-2xl px-3 py-2 text-sm',
                         msg.role === 'user'
                           ? 'chat-bubble-sent text-foreground'
                           : 'chat-bubble-received'
@@ -528,9 +349,25 @@ export function AIAssistant() {
                         msg.content
                       )}
                     </div>
+                    {msg.role === 'user' && msg.status === 'error' && (
+                      <div className="mt-1 flex items-center gap-2 text-[11px] text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>AI failed (message saved)</span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => retryMessage(msg.id)}
+                          disabled={isGenerating}
+                          className="h-6 px-2 text-[10px]"
+                        >
+                          <RefreshCw className="h-2.5 w-2.5 mr-1" />
+                          Retry
+                        </Button>
+                      </div>
+                    )}
                   </motion.div>
                 ))}
-                {isLoading && (
+                {isGenerating && (
                   <div className="flex justify-start">
                     <div className="chat-bubble-received px-4 py-2">
                       <div className="typing-indicator">
@@ -552,18 +389,17 @@ export function AIAssistant() {
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                onKeyPress={handleKeyPress}
+                onKeyDown={handleKeyDown}
                 placeholder={`Ask ${currentConfig.name}...`}
                 className="flex-1 input-premium"
-                disabled={isLoading}
               />
               <Button
                 onClick={handleSend}
-                disabled={!input.trim() || isLoading}
+                disabled={!input.trim()}
                 className="btn-send h-10 w-10"
                 size="icon"
               >
-                {isLoading ? (
+                {isGenerating ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Send className="h-4 w-4" />
@@ -575,7 +411,7 @@ export function AIAssistant() {
                 variant="ghost"
                 size="sm"
                 className="mt-2 text-xs text-muted-foreground"
-                onClick={clearHistory}
+                onClick={clearAllConversations}
               >
                 Clear chat history
               </Button>

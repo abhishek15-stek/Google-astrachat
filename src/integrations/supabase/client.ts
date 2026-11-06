@@ -2,18 +2,27 @@ import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 import { brokeredPreviewStorage } from './previewAuthStorage';
 
-const envUrl = import.meta.env.VITE_SUPABASE_URL;
-const envKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
+const envUrl = import.meta.env?.VITE_SUPABASE_URL;
+const envKey = import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env?.VITE_SUPABASE_ANON_KEY;
 
-export const isSupabaseConfigured = Boolean(
+const hasExternalSupabase = Boolean(
   envUrl &&
   envKey &&
   !envUrl.includes('placeholder-project') &&
   !envKey.includes('placeholder-anon-key')
 );
 
-const SUPABASE_URL = envUrl || "https://placeholder-project.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = envKey || "placeholder-anon-key";
+const getDefaultLocalSupabaseUrl = () => {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}/__supabase`;
+  }
+  return 'http://localhost:3000/__supabase';
+};
+
+export const isSupabaseConfigured = true;
+
+const SUPABASE_URL = hasExternalSupabase ? envUrl : getDefaultLocalSupabaseUrl();
+const SUPABASE_PUBLISHABLE_KEY = hasExternalSupabase ? envKey : "astrachat-local-anon-key";
 
 // Use standard localStorage unless specifically inside a verified Lovable preview environment
 const getAuthStorage = () => {
